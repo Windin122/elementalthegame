@@ -1,0 +1,6 @@
+{
+  "name": "ЭЛЕМЕНТАЛЬ",
+  "description": "Главное меню веб-игры Элементаль",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
