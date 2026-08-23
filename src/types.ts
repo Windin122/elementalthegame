@@ -47,6 +47,10 @@ export interface GameState {
   version?: number;
   listeners?: any[];
   signals?: any[];
+  bgm?: {
+    trackUrl: string | null;
+    volume: number;
+  };
   config: {
     rounds: Round[];
     timers: {

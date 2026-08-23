@@ -1,15 +1,17 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useStore } from '../store';
 import { SyncManager } from '../SyncManager';
 import { api } from '../api';
 import { BookOpen, X, PartyPopper } from 'lucide-react';
+import { formatTime, getTimerClasses } from '../utils';
 import { motion, AnimatePresence } from 'motion/react';
+import Cropper from 'react-easy-crop';
 
 export function PlayerView() {
   const { setView, setPlayerId, setRoomCode, playerId, roomCode, gameState, setGameState } = useStore();
   const [code, setCode] = useState(roomCode || '');
   const [name, setName] = useState('');
-  const [step, setStep] = useState<'code' | 'name' | 'avatar' | 'waiting' | 'playing'>(roomCode ? 'name' : 'code');
+  const [step, setStep] = useState<'code' | 'name' | 'avatar' | 'waiting' | 'playing' | 'reconnect'>(roomCode ? 'name' : 'code');
   const [error, setError] = useState('');
   
   const [showHelp, setShowHelp] = useState(false);
@@ -52,8 +54,24 @@ export function PlayerView() {
   }, [roomCode, playerId, step]);
 
   const handleJoinCode = async () => {
-    setRoomCode(code);
-    setStep('name');
+    if (!roomCode || roomCode.length < 4) return;
+    setError('');
+    try {
+      const res = await api.getGameState(roomCode);
+      if (res.success && res.state) {
+        setGameState(res.state);
+        // If the game has already started (playing), allow them to choose a profile
+        if (res.state.status === 'playing') {
+          setStep('reconnect');
+        } else {
+          setStep('name');
+        }
+      } else {
+        setError(res.message || 'Комната не найдена');
+      }
+    } catch (err) {
+      setError('Ошибка сети');
+    }
   };
 
   const handleJoinName = async () => {
@@ -102,22 +120,12 @@ export function PlayerView() {
     if (file) {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const img = new Image();
-        img.onload = () => {
-          if (canvasRef.current) {
-             const context = canvasRef.current.getContext('2d');
-             if(context) {
-               canvasRef.current.width = 150;
-               canvasRef.current.height = 150;
-               context.drawImage(img, 0, 0, 150, 150);
-               setAvatarDataUrl(canvasRef.current.toDataURL('image/jpeg', 0.7));
-             }
-          }
-        };
-        img.src = ev.target?.result as string;
+        setCropImageSrc(ev.target?.result as string);
+        setCropTarget('avatar');
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = '';
   };
 
   const handleSaveAvatar = async () => {
@@ -129,6 +137,57 @@ export function PlayerView() {
   
   const [guessInput, setGuessInput] = useState('');
   const [selectedVote, setSelectedVote] = useState<string | null>(null);
+
+  const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
+  const [cropTarget, setCropTarget] = useState<'avatar' | 'roundPhoto' | null>(null);
+  
+  const onCropComplete = useCallback((croppedArea: any, croppedAreaPixels: any) => {
+    setCroppedAreaPixels(croppedAreaPixels);
+  }, []);
+  
+  const handleSaveCrop = async () => {
+    if (!cropImageSrc || !croppedAreaPixels) return;
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      const size = cropTarget === 'avatar' ? 150 : 300;
+      canvas.width = size;
+      canvas.height = size;
+
+      ctx.drawImage(
+        img,
+        croppedAreaPixels.x,
+        croppedAreaPixels.y,
+        croppedAreaPixels.width,
+        croppedAreaPixels.height,
+        0,
+        0,
+        size,
+        size
+      );
+
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      if (cropTarget === 'avatar') {
+        setAvatarDataUrl(dataUrl);
+      } else {
+        setPhotoDataUrl(dataUrl);
+      }
+      
+      setCropImageSrc(null);
+      setCropTarget(null);
+      setCrop({ x: 0, y: 0 });
+      setZoom(1);
+    };
+    img.src = cropImageSrc;
+  };
+
   
   const photoVideoRef = useRef<HTMLVideoElement>(null);
   const photoCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -158,18 +217,53 @@ export function PlayerView() {
     await api.submitVote(roomCode, playerId, selectedVote);
   };
 
-  const startPhotoCamera = async () => {
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
+
+  const startPhotoCamera = async (mode = facingMode) => {
     setIsPhotoCameraActive(true);
-    setPhotoDataUrl(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-      if (photoVideoRef.current) {
-        photoVideoRef.current.srcObject = stream;
+      if (photoVideoRef.current && photoVideoRef.current.srcObject) {
+         const oldStream = photoVideoRef.current.srcObject as MediaStream;
+         oldStream.getTracks().forEach(t => t.stop());
       }
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode, width: { ideal: 1024 }, height: { ideal: 1024 } } });
+      const attachStream = () => {
+        if (photoVideoRef.current) {
+          photoVideoRef.current.srcObject = stream;
+          photoVideoRef.current.play().catch(e => console.error("Play error:", e));
+        } else {
+          setTimeout(attachStream, 50);
+        }
+      };
+      attachStream();
     } catch (err) {
       console.warn('Camera not available', err);
     }
   };
+
+  const toggleCamera = () => {
+     const newMode = facingMode === 'user' ? 'environment' : 'user';
+     setFacingMode(newMode);
+     startPhotoCamera(newMode);
+  };
+
+  const stopPhotoCamera = () => {
+    setIsPhotoCameraActive(false);
+    if (photoVideoRef.current && photoVideoRef.current.srcObject) {
+      const stream = photoVideoRef.current.srcObject as MediaStream;
+      stream?.getTracks().forEach(track => track.stop());
+    }
+  };
+  
+  useEffect(() => {
+    if (gameState?.phase === 'photo' && !gameState?.players[playerId]?.uploadedPhoto && !photoDataUrl) {
+      startPhotoCamera(facingMode);
+    } else {
+      stopPhotoCamera();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState?.phase, gameState?.players[playerId]?.uploadedPhoto, photoDataUrl]); // auto-start/stop camera based on phase
+
 
   const takeRoundPhoto = () => {
     if (photoVideoRef.current && photoCanvasRef.current) {
@@ -191,31 +285,19 @@ export function PlayerView() {
   };
 
   const handleRoundPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isPhotoCameraActive) {
+      stopPhotoCamera();
+    }
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const img = new Image();
-        img.onload = () => {
-          if (photoCanvasRef.current) {
-             const context = photoCanvasRef.current.getContext("2d");
-             if(context) {
-               photoCanvasRef.current.width = 300;
-               photoCanvasRef.current.height = 300;
-               context.drawImage(img, 0, 0, 300, 300);
-               setPhotoDataUrl(photoCanvasRef.current.toDataURL("image/jpeg", 0.6));
-               
-               if (photoVideoRef.current && photoVideoRef.current.srcObject) {
-                 const stream = photoVideoRef.current.srcObject as MediaStream;
-                 stream?.getTracks().forEach(track => track.stop());
-               }
-             }
-          }
-        };
-        img.src = ev.target?.result as string;
+        setCropImageSrc(ev.target?.result as string);
+        setCropTarget('roundPhoto');
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = '';
   };
 
   const submitRoundPhoto = async () => {
@@ -228,6 +310,35 @@ export function PlayerView() {
     const player = gameState.players[playerId];
     const currentRound = gameState.config.rounds[gameState.round];
     const currentQuestion = currentRound?.questions[gameState.questionIndex];
+
+    const renderQuestionText = () => {
+      if (currentRound?.type === "paparazzi") {
+        if (gameState.phase === "reading" || gameState.phase === "photo" || gameState.phase === "guessing") {
+          return <span className="text-center text-white leading-relaxed">Узнайте роль другого игрока и сфотографируйте этого игрока в этой роли на своём устройстве, не раскрывая его роли</span>;
+        }
+        return <span className="text-center text-white leading-relaxed text-xl">Кто самый лучший подражатель?</span>;
+      }
+      if (!currentQuestion) return null;
+      let text = currentQuestion.text;
+      if (currentRound.type === 'fish' && currentQuestion.targetPlayerId) {
+        const targetPlayer = gameState.players[currentQuestion.targetPlayerId];
+        if (targetPlayer && text.toLowerCase().includes('этот игрок')) {
+          const parts = text.split(new RegExp('этот игрок', 'i'));
+          return (
+            <span className="flex items-center justify-center flex-wrap gap-2 text-center text-white">
+              {parts[0]}
+              <span className="inline-flex items-center gap-1 bg-blue-900/40 px-2 py-0.5 rounded-full border border-blue-500/50">
+                 {targetPlayer.avatar && <img src={targetPlayer.avatar} alt="" className="w-5 h-5 rounded-full object-cover" />}
+                 <span className="text-blue-300 font-bold text-sm">{targetPlayer.name}</span>
+              </span>
+              {parts[1]}
+            </span>
+          );
+        }
+      }
+      return <span className="text-center text-white">{text}</span>;
+    };
+
     
     return (
       <div className="min-h-screen bg-[#050505] text-white p-6 font-sans flex flex-col items-center relative">
@@ -237,17 +348,7 @@ export function PlayerView() {
                <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-blue-500">
                  <img src={player.avatar} alt="" className="w-full h-full object-cover" />
                </div>
-               {player.hats > 0 && !player.usedHatThisRound && (
-                 <div className="absolute -top-3 -right-3 text-2xl z-10 filter drop-shadow-md pointer-events-none">
-                   🎩
-                   <span className="absolute -bottom-1 -right-1 bg-blue-600 text-white text-[10px] font-bold px-1 rounded-full">{player.hats}</span>
-                 </div>
-               )}
-               {player.usedHatThisRound && (
-                 <div className="absolute -top-3 -right-3 text-2xl filter drop-shadow-md pointer-events-none" title="Шляпа использована!">
-                   🎩
-                 </div>
-               )}
+
                {gameState.config.birthdayBoyId === playerId && (
                  <div className="absolute -top-4 -left-3 text-3xl transform -rotate-12 pointer-events-none z-20">🥳</div>
                )}
@@ -261,17 +362,16 @@ export function PlayerView() {
          </div>
          
          {/* Live Timer & Help Button */}
-         {gameState.phaseEndTime > 0 && (
-           <div className="fixed bottom-6 w-full max-w-sm flex justify-between items-center px-4 z-50">
-             <button onClick={() => setShowHelp(true)} className="bg-gray-800 border border-gray-600 rounded-full w-12 h-12 flex items-center justify-center hover:bg-gray-700 transition-colors">
-               <BookOpen size={20} className="text-gray-300" />
-             </button>
-             <div className="bg-black/80 border border-gray-700 px-6 py-2 rounded-full backdrop-blur-md text-2xl font-mono font-bold shadow-2xl shadow-blue-900/20">
-               00:{timeLeft.toString().padStart(2, '0')}
+         <div className="w-full max-w-sm flex justify-between items-center mb-2 px-2 z-10">
+           {gameState.phaseEndTime > 0 ? (
+             <div className={`bg-gray-800 border border-gray-700 px-5 py-1.5 rounded-full text-xl font-mono font-bold shadow-lg transition-all ${getTimerClasses(timeLeft) || 'text-white'}`}>
+               ⏱ {formatTime(timeLeft)}
              </div>
-             <div className="w-12 h-12"></div> {/* Spacer for centering */}
-           </div>
-         )}
+           ) : <div></div>}
+           <button onClick={() => setShowHelp(true)} className="bg-gray-800 border border-gray-600 rounded-full w-10 h-10 flex items-center justify-center hover:bg-gray-700 transition-colors shadow-lg" title="Подсказка">
+             <BookOpen size={18} className="text-gray-300" />
+           </button>
+         </div>
          
          {gameState.phase === 'reading' && (
            <div className="text-center mt-12 animate-fade-in w-full max-w-sm">
@@ -282,6 +382,14 @@ export function PlayerView() {
          
          {gameState.phase === 'guessing' && (
            <div className="text-center mt-8 animate-fade-in w-full max-w-sm flex flex-col items-center">
+
+             {(currentQuestion?.text || currentRound?.type === 'paparazzi') && (
+               <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-4 shadow-lg w-full">
+                 <p className="text-lg font-bold text-white text-center leading-relaxed">
+                   {renderQuestionText()}
+                 </p>
+               </div>
+             )}
              {!player.currentGuess ? (
                <>
                  <h2 className="text-2xl font-bold mb-6">Введи свой вариант</h2>
@@ -314,154 +422,95 @@ export function PlayerView() {
                const assignment = gameState.config.paparazziAssignments.find(a => a.photographerId === playerId);
                const target = assignment ? gameState.players[assignment.targetId] : null;
                
-               if (assignment && target && !player.uploadedPhoto) {
-                 if (isPhotoCameraActive && !photoDataUrl) {
-                   return (
-                     <div className="w-full flex flex-col items-center gap-4">
-                       <div className="bg-purple-900/80 p-4 rounded-xl border border-purple-500 w-full mb-2">
-                         <p className="text-white text-center font-bold">Сними {target.name} в роли {assignment.role}</p>
-                       </div>
-                       <div className="w-full aspect-square rounded-2xl overflow-hidden bg-black border-2 border-purple-500 relative">
-                         <video ref={photoVideoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
-                         <canvas ref={photoCanvasRef} className="hidden" />
-                       </div>
-                       <div className="flex flex-col gap-4 w-full">
-                         <button onClick={takeRoundPhoto} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full tracking-[0.1em]">
-                           СДЕЛАТЬ СНИМОК
-                         </button>
-                         <div className="relative w-full">
-                           <input type="file" accept="image/*" onChange={handleRoundPhotoUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                           <div className="bg-gray-800 hover:bg-gray-700 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full text-center tracking-[0.1em]">
-                             ИЛИ ЗАГРУЗИТЬ
-                           </div>
-                         </div>
-                         <button onClick={() => setIsPhotoCameraActive(false)} className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-8 rounded-xl transition-colors w-full border border-gray-600">
-                           НАЗАД
-                         </button>
-                       </div>
-                     </div>
-                   );
-                 }
-                 
-                 if (photoDataUrl && !player.uploadedPhoto) {
-                   return (
-                     <div className="w-full flex flex-col items-center gap-4">
-                       <div className="w-full aspect-square rounded-2xl overflow-hidden border-2 border-purple-500 relative">
-                         <img src={photoDataUrl} className="w-full h-full object-cover transform scale-x-[-1]" />
-                       </div>
-                       <div className="flex gap-4 w-full">
-                         <button onClick={() => setPhotoDataUrl(null)} className="flex-1 bg-gray-600 hover:bg-gray-500 text-white font-bold py-4 px-4 rounded-xl transition-colors">
-                           ПЕРЕСНЯТЬ
-                         </button>
-                         <button onClick={submitRoundPhoto} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-4 px-4 rounded-xl transition-colors">
-                           ОТПРАВИТЬ
-                         </button>
-                       </div>
-                     </div>
-                   );
+               if (assignment && target) {
+                 if (player.uploadedPhoto) {
+                    return (
+                      <div className="w-full flex flex-col items-center gap-4">
+                        <div className="w-full aspect-square rounded-2xl overflow-hidden bg-black border-2 border-green-500 relative">
+                          <img src={player.uploadedPhoto} className="w-full h-full object-cover" />
+                        </div>
+                        <div className="w-full py-4 text-green-400 text-center font-bold border border-green-500/50 rounded-xl bg-green-900/20">ФОТО ОТПРАВЛЕНО ✓</div>
+                        <p className="text-gray-400 text-sm text-center">Ожидайте других игроков</p>
+                      </div>
+                    );
                  }
 
                  return (
                    <div className="w-full flex flex-col items-center gap-4">
-                     <div className="bg-purple-900/50 p-6 rounded-xl border border-purple-500 w-full mb-4">
-                       <h3 className="text-lg text-purple-300 font-bold mb-2 text-center">Твоя цель:</h3>
-                       <div className="flex items-center justify-center gap-4 mb-4">
-                         <img src={target.avatar} className="w-16 h-16 rounded-full border-2 border-purple-400 object-cover" />
-                         <span className="text-2xl font-black text-white">{target.name}</span>
-                       </div>
-                       <h3 className="text-lg text-purple-300 font-bold mb-2 text-center">В роли:</h3>
-                       <p className="text-xl font-black text-white text-center">{assignment.role}</p>
-                     </div>
-                     <button onClick={() => setIsPhotoCameraActive(true)} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full tracking-[0.1em]">
-                       ОТКРЫТЬ КАМЕРУ
-                     </button>
-                     <div className="relative w-full mt-2">
-                       <input type="file" accept="image/*" onChange={handleRoundPhotoUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                       <button className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-8 rounded-xl transition-colors w-full border border-gray-600">
-                         ИЛИ ЗАГРУЗИТЬ ИЗ ГАЛЕРЕИ
-                       </button>
-                     </div>
-                   </div>
-                 );
-               }
-               
-               if (isPhotoCameraActive && !photoDataUrl) {
-                 return (
-                   <div className="w-full flex flex-col items-center gap-4">
+                     {/* Window 1: Camera or Taken Photo */}
                      <div className="w-full aspect-square rounded-2xl overflow-hidden bg-black border-2 border-purple-500 relative">
-                       <video ref={photoVideoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
-                       <canvas ref={photoCanvasRef} className="hidden" />
+                       {!photoDataUrl ? (
+                         <>
+                           <video ref={photoVideoRef} autoPlay playsInline muted className={`w-full h-full object-cover ${facingMode === 'user' ? 'transform scale-x-[-1]' : ''}`} />
+                           <canvas ref={photoCanvasRef} className="hidden" />
+                         </>
+                       ) : (
+                         <img src={photoDataUrl} className={`w-full h-full object-cover ${facingMode === 'user' ? 'transform scale-x-[-1]' : ''}`} />
+                       )}
                      </div>
                      
-                     <div className="flex flex-col gap-4 w-full">
-                       <button onClick={takeRoundPhoto} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full tracking-[0.1em]">
-                         СДЕЛАТЬ СНИМОК
-                       </button>
-                       <div className="relative w-full">
-                         <input type="file" accept="image/*" onChange={handleRoundPhotoUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                         <div className="bg-gray-800 hover:bg-gray-700 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full text-center tracking-[0.1em]">
-                           ИЛИ ЗАГРУЗИТЬ
+                     {/* Window 2: Info & Controls */}
+                     <div className="bg-gray-800/80 border border-gray-600 rounded-2xl p-4 w-full relative text-center">
+                        {/* Toggle camera button */}
+                        {!photoDataUrl && (
+                          <button onClick={toggleCamera} className="absolute top-4 right-4 bg-gray-700 hover:bg-gray-600 p-2 rounded-full transition-colors z-10">
+                            <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                          </button>
+                        )}
+                        <p className="text-sm text-gray-400 mb-1">Сфотографируй:</p>
+                        <p className="text-2xl font-black text-purple-300 uppercase">{target.name}</p>
+                        <p className="text-sm text-gray-400 mt-2">в роли</p>
+                        <p className="text-xl font-bold text-yellow-400">«{assignment.role}»</p>
+                        <p className="text-xs text-red-400 mt-2 font-bold uppercase tracking-wider">Называть игроку роль нельзя!</p>
+                     </div>
+
+                     {/* Actions */}
+                     <div className="flex flex-col gap-3 w-full mt-2">
+                       {!photoDataUrl ? (
+                         <>
+                           <button onClick={takeRoundPhoto} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full tracking-[0.1em]">
+                             СДЕЛАТЬ СНИМОК
+                           </button>
+                           <div className="relative w-full">
+                             <input type="file" accept="image/*" onChange={handleRoundPhotoUpload} className="absolute inset-0 z-10 w-full h-full opacity-0 cursor-pointer" />
+                             <div className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-8 rounded-xl transition-colors w-full text-center text-sm tracking-wider">
+                               ЗАГРУЗИТЬ ИЗ ГАЛЕРЕИ
+                             </div>
+                           </div>
+                         </>
+                       ) : (
+                         <div className="flex gap-4 w-full">
+                           <button onClick={() => setPhotoDataUrl(null)} className="flex-1 bg-gray-600 hover:bg-gray-500 text-white font-bold py-4 px-4 rounded-xl transition-colors text-sm">
+                             ПЕРЕСНЯТЬ
+                           </button>
+                           <button onClick={submitRoundPhoto} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-4 px-4 rounded-xl transition-colors text-sm">
+                             ОТПРАВИТЬ
+                           </button>
                          </div>
-                       </div>
-                     </div>
-                   </div>
-                 );
-               }
-               
-               if (photoDataUrl) {
-                 return (
-                   <div className="w-full flex flex-col items-center gap-4">
-                     <div className="w-full aspect-square rounded-2xl overflow-hidden bg-black border-2 border-green-500 relative">
-                       <img src={photoDataUrl} className="w-full h-full object-cover" />
-                     </div>
-                     {(!player.uploadedPhoto || player.uploadedPhoto !== photoDataUrl) ? (
-                       <div className="flex gap-2 w-full">
-                         <button onClick={submitRoundPhoto} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl transition-colors text-sm">ОТПРАВИТЬ ФОТО</button>
-                         <button onClick={startPhotoCamera} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 rounded-xl transition-colors text-sm">ПЕРЕДЕЛАТЬ</button>
-                       </div>
-                     ) : (
-                       <div className="w-full flex flex-col items-center gap-4 mt-4">
-                         <div className="w-full py-4 text-green-400 font-bold border border-green-500/50 rounded-xl bg-green-900/20">ФОТО ОТПРАВЛЕНО ✓</div>
-                         <p className="text-gray-400 text-sm">Если вы хотите, можете его переснять</p>
-                         <button onClick={startPhotoCamera} className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-xl transition-colors text-sm w-full">ПЕРЕСНЯТЬ</button>
-                       </div>
-                     )}
-                   </div>
-                 );
-               }
-               
-               if (!target) return <p className="text-gray-400">Смотри на экран</p>;
-               
-               return (
-                 <div className="bg-gray-900/80 border border-purple-500/50 p-6 rounded-2xl mb-6 w-full">
-                    <p className="text-sm text-gray-400 mb-2">Твоя цель для фото:</p>
-                    <div className="text-xl font-bold mb-2 flex items-center justify-center gap-3">
-                       <img src={target.avatar} className="w-8 h-8 rounded-full" alt="" />
-                       {target.name}
+                       )}
                     </div>
-                    <p className="text-sm text-gray-400 mb-2 mt-4">Он должен изобразить:</p>
-                    <div className="text-lg font-bold text-yellow-400">{assignment?.role}</div>
-                    
-                    {!player.uploadedPhoto && (
-                      <button onClick={startPhotoCamera} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 px-8 rounded-xl w-full transition-colors mt-6">ОТКРЫТЬ КАМЕРУ</button>
-                    )}
-                 </div>
-               );
-             })()}
+                  </div>
+                 );
+               }
+               return <p className="text-gray-400">Смотри на экран</p>;
+               
+})()}
            </div>
          )}
          
          {gameState.phase === 'answering' && (
-           <div className="text-center mt-4 animate-fade-in w-full max-w-sm">
+           <div className="text-center mt-4 animate-fade-in w-full max-w-sm flex flex-col items-center">
+             {currentQuestion?.text && (
+               <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-4 shadow-lg w-full">
+                 <p className="text-lg font-bold text-white text-center leading-relaxed">
+                   {renderQuestionText()}
+                 </p>
+               </div>
+             )}
              {!player.currentVote ? (
                <>
-                 {currentQuestion?.text && (
-                   <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 mb-4 shadow-lg">
-                     <p className="text-lg font-bold text-white text-center leading-relaxed">
-                       {currentQuestion.text}
-                     </p>
-                   </div>
-                 )}
                  <h2 className="text-xl font-bold mb-6">Выбери ответ</h2>
                  <div className="flex flex-col gap-3 mb-6">
                     {Object.values(gameState.players).map(p => {
@@ -502,18 +551,19 @@ export function PlayerView() {
                     })}
                  </div>
                  
-                 {player.hats > 0 && !player.usedHatThisRound && (
-                   <button 
-                     onClick={() => api.useHat(roomCode, playerId)} 
-                     className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-xl w-full transition-colors mb-3 flex items-center justify-center gap-2"
-                   >
-                     <span className="text-xl">🎩</span> СНЯТЬ ШЛЯПУ (x2 очки)
-                   </button>
-                 )}
-                 {player.usedHatThisRound && (
+                 {player.usedHatThisRound ? (
                    <div className="bg-gray-800 text-blue-400 font-bold py-3 px-8 rounded-xl w-full mb-3 flex items-center justify-center gap-2 border border-blue-500/30">
                      <span className="text-xl">🎩</span> ШЛЯПА ИСПОЛЬЗОВАНА
                    </div>
+                 ) : (
+                   <button 
+                     onClick={() => api.useHat(roomCode, playerId)} 
+                     disabled={player.hats === 0}
+                     className={`font-bold py-3 px-8 rounded-xl w-full transition-colors mb-3 flex items-center justify-center gap-2 ${player.hats > 0 ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}
+                   >
+                     <span className="text-xl ${player.hats === 0 ? 'opacity-50' : ''}">🎩</span> 
+                     СНЯТЬ ШЛЯПУ (x2 очки) {player.hats > 0 ? `(${player.hats} шт)` : ''}
+                   </button>
                  )}
                  <button 
                     onClick={submitVote} 
@@ -613,7 +663,7 @@ export function PlayerView() {
                      <p>В этом раунде тебе нужно придумать самое подходящее или смешное предположение о человеке, про которого задан вопрос. Потом мы выберем лучшее!</p>
                    )}
                    {gameState.phase === 'photo' && (
-                     <p>Твоя задача — сфотографировать назначенного игрока так, чтобы он изобразил свою тайную роль. Не называй ему слово напрямую, объясняй намеками!</p>
+                     <p>Твоя задача — сделать фото назначенного игрока. В нижнем окне указано, кого и в какой роли нужно сфотографировать. ВНИМАНИЕ: называть игроку роль напрямую строго запрещено, объясняй только намеками!</p>
                    )}
                                       {gameState.phase === "answering" && (
                      <p>Выбери вариант ответа, который по твоему мнению выберет большинство. Не переговаривайтесь! Если ты уверен — используй шляпу 🎩 для удвоения очков!</p>
@@ -652,7 +702,33 @@ export function PlayerView() {
               placeholder="КОД"
               maxLength={4}
             />
-            <button onClick={() => {if(roomCode && roomCode.length >= 4) setStep("name")}} disabled={!roomCode || roomCode.length < 4} className="bg-blue-600/80 hover:bg-blue-500 disabled:opacity-50 text-white px-8 py-4 rounded-xl tracking-[0.2em] transition-colors w-full font-bold">ДАЛЕЕ</button>
+            <button onClick={handleJoinCode} disabled={!roomCode || roomCode.length < 4} className="bg-blue-600/80 hover:bg-blue-500 disabled:opacity-50 text-white px-8 py-4 rounded-xl tracking-[0.2em] transition-colors w-full font-bold">ДАЛЕЕ</button>
+          </motion.div>
+        )}
+        
+        {step === "reconnect" && gameState && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full flex flex-col items-center">
+            <p className="text-gray-400 mb-6 text-center">Игра уже идет! Выбери свой профиль, чтобы вернуться:</p>
+            <div className="flex flex-col gap-4 justify-center w-full max-w-sm mb-6 max-h-[50vh] overflow-y-auto pr-2">
+              {Object.values(gameState.players).map(p => (
+                <button 
+                  key={p.id}
+                  onClick={() => {
+                    if (window.confirm(`Вернуться как ${p.name}?`)) {
+                      setPlayerId(p.id);
+                      setStep('playing');
+                    }
+                  }}
+                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 p-3 rounded-xl flex items-center gap-4 w-full transition-colors"
+                >
+                  <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-gray-500 shrink-0">
+                    {p.avatar && <img src={p.avatar} alt="" className="w-full h-full object-cover" />}
+                  </div>
+                  <span className="font-bold text-lg text-white">{p.name}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setStep('code')} className="text-gray-500 hover:text-white transition-colors">Отмена</button>
           </motion.div>
         )}
         
@@ -696,7 +772,7 @@ export function PlayerView() {
                   СДЕЛАТЬ ФОТО
                 </button>
                 <div className="relative w-full">
-                  <input type="file" accept="image/*" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <input type="file" accept="image/*" onChange={handleFileUpload} className="absolute inset-0 z-10 w-full h-full opacity-0 cursor-pointer" />
                   <div className="bg-gray-800 hover:bg-gray-700 text-white font-bold py-4 px-8 rounded-xl transition-colors w-full text-center tracking-[0.1em]">
                     ИЛИ ЗАГРУЗИТЬ
                   </div>
@@ -715,6 +791,68 @@ export function PlayerView() {
           </motion.div>
         )}
       </div>
+      {/* Cropper Modal */}
+      <AnimatePresence>
+        {cropImageSrc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex flex-col bg-black/95 backdrop-blur-md"
+          >
+            <div className="relative flex-1 w-full mt-4">
+              <Cropper
+                image={cropImageSrc}
+                crop={crop}
+                zoom={zoom}
+                aspect={1}
+                onCropChange={setCrop}
+                onCropComplete={onCropComplete}
+                onZoomChange={setZoom}
+                classes={{ containerClassName: 'bg-transparent' }}
+              />
+            </div>
+            
+            <div className="p-6 bg-gray-900/80 border-t border-gray-800 flex flex-col gap-4">
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-gray-400">Масштаб</span>
+                <input
+                  type="range"
+                  value={zoom}
+                  min={1}
+                  max={3}
+                  step={0.1}
+                  aria-labelledby="Zoom"
+                  onChange={(e) => {
+                    setZoom(Number(e.target.value))
+                  }}
+                  className="w-full"
+                />
+              </div>
+              
+              <div className="flex gap-4">
+                <button
+                  onClick={() => {
+                    setCropImageSrc(null);
+                    setCropTarget(null);
+                    setCrop({ x: 0, y: 0 });
+                    setZoom(1);
+                  }}
+                  className="flex-1 py-4 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold"
+                >
+                  ОТМЕНА
+                </button>
+                <button
+                  onClick={handleSaveCrop}
+                  className="flex-1 py-4 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold"
+                >
+                  СОХРАНИТЬ
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

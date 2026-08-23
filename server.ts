@@ -21,6 +21,46 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+import fsSync from "fs";
+const BGM_DIR = path.join(process.cwd(), "data", "bgm");
+if (!fsSync.existsSync(BGM_DIR)) {
+  fsSync.mkdirSync(BGM_DIR, { recursive: true });
+}
+
+app.use("/bgm", express.static(BGM_DIR));
+
+app.get("/api/bgm", (req, res) => {
+  const files = fsSync.readdirSync(BGM_DIR);
+  res.json({ success: true, tracks: files.map(f => ({ name: f, url: `/bgm/${f}` })) });
+});
+
+app.post("/api/bgm", (req, res) => {
+  const { name, dataUrl } = req.body;
+  if (!name || !dataUrl) return res.status(400).json({ success: false });
+  const parts = dataUrl.split(",");
+  if (parts.length !== 2) {
+    return res.status(400).json({ success: false, error: "Invalid data URL" });
+  }
+  const buffer = Buffer.from(parts[1], "base64");
+  const safeName = name.replace(/[^a-zA-Z0-9.-]/g, "_");
+  const fileName = Date.now() + "_" + safeName;
+  fsSync.writeFileSync(path.join(BGM_DIR, fileName), buffer);
+  res.json({ success: true, track: { name: fileName, url: `/bgm/${fileName}` } });
+});
+
+app.delete("/api/bgm/:filename", (req, res) => {
+  const { filename } = req.params;
+  const safeFilename = path.basename(filename);
+  const filePath = path.join(BGM_DIR, safeFilename);
+  if (fsSync.existsSync(filePath)) {
+    fsSync.unlinkSync(filePath);
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, error: "Not found" });
+  }
+});
+
+
 // In-memory store for rooms
 const rooms: Record<string, GameState> = {};
 
@@ -60,6 +100,7 @@ app.post('/api/room/create', (req, res) => {
     phaseEndTime: 0,
     players: {},
     screenConnected: false,
+    bgm: { trackUrl: null, volume: 0.1 },
     config: {
       rounds: defaultRounds,
       timers: { reading: 10, answering: 30, guessing: 40, photo: 300, results: 15 },
@@ -204,6 +245,26 @@ function advanceGamePhase(room: GameState) {
       room.phase = 'guessing';
       room.phaseEndTime = Date.now() + room.config.timers.guessing * 1000;
     } else if (round.type === 'paparazzi') {
+      if (!room.config.paparazziAssignments || room.config.paparazziAssignments.length === 0) {
+        const pIds = Object.keys(room.players);
+        let valid = false;
+        let shuffled: string[] = [];
+        if (pIds.length >= 2) {
+          while (!valid) {
+            shuffled = [...pIds];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            valid = shuffled.every((val, i) => val !== pIds[i]);
+          }
+          room.config.paparazziAssignments = pIds.map((targetId, i) => ({
+            targetId,
+            photographerId: shuffled[i],
+            role: 'Загадочная роль'
+          }));
+        }
+      }
       room.phase = 'photo';
       room.phaseEndTime = Date.now() + room.config.timers.photo * 1000;
     } else {
@@ -240,22 +301,22 @@ function advanceGamePhase(room: GameState) {
       }
     }
     
-    room.phase = 'results';
-    room.phaseEndTime = Date.now() + room.config.timers.results * 1000;
+    if (room.questionIndex >= round.questions.length - 1 || round.type === 'paparazzi') {
+      room.phase = 'round_end';
+      room.phaseEndTime = 0;
+    } else {
+      room.phase = 'results';
+      room.phaseEndTime = Date.now() + room.config.timers.results * 1000;
+    }
   } else if (room.phase === 'results') {
     // Clear hat usage for next question
     for (const pId in room.players) {
       room.players[pId].usedHatThisRound = false;
     }
     
-    if (room.questionIndex < round.questions.length - 1 && round.type !== 'paparazzi') {
-      room.questionIndex++;
-      room.phase = 'reading';
-      room.phaseEndTime = Date.now() + room.config.timers.reading * 1000;
-    } else {
-      room.phase = 'round_end';
-      room.phaseEndTime = 0; 
-    }
+    room.questionIndex++;
+    room.phase = 'reading';
+    room.phaseEndTime = Date.now() + room.config.timers.reading * 1000;
   } else if (room.phase === 'round_end') {
     // Clear hat usage for new round
     for (const pId in room.players) {

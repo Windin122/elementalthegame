@@ -3,7 +3,9 @@ import { useStore } from '../store';
 import { SyncManager } from '../SyncManager';
 import { api } from '../api';
 import { GameState, RoundType, GamePhase } from '../types';
-import { HelpCircle, Shuffle, Save, Info, Copy, Check } from 'lucide-react';
+import { HelpCircle, Shuffle, Save, Info, Copy, Check, Music, Upload, Play, Pause, Volume2, X, Trash2, QrCode } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { formatTime, getTimerClasses } from '../utils';
 
 function getStatusText(state: GameState) {
   if (state.status === 'lobby') return 'Ожидание игроков';
@@ -33,6 +35,23 @@ export function AdminView() {
   const [copiedPublic, setCopiedPublic] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  const [showBgmModal, setShowBgmModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [bgmTracks, setBgmTracks] = useState<{name: string, url: string}[]>([]);
+
+
+  const [timeLeft, setTimeLeft] = useState(0);
+
+  useEffect(() => {
+    if (!gameState || gameState.phaseEndTime <= 0) return;
+    const interval = setInterval(() => {
+      const remaining = Math.ceil((gameState.phaseEndTime - Date.now()) / 1000);
+      setTimeLeft(remaining > 0 ? remaining : 0);
+    }, 200);
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+
   useEffect(() => {
     let interval: any;
     if (adminToken && roomCode) {
@@ -51,6 +70,42 @@ export function AdminView() {
       setDraftConfig(gameState.config);
     }
   }, [gameState, draftConfig]);
+
+
+  useEffect(() => {
+    if (showBgmModal) {
+      api.getBgmTracks().then(res => {
+        if (res.success) setBgmTracks(res.tracks);
+      });
+    }
+  }, [showBgmModal]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      const res = await api.uploadBgmTrack(file.name, dataUrl);
+      if (res.success) {
+        setBgmTracks([...bgmTracks, res.track]);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+
+  const handleDeleteTrack = async (track: {name: string, url: string}) => {
+    if (confirm(`Удалить трек ${track.name}?`)) {
+      const res = await api.deleteBgmTrack(track.name);
+      if (res.success) {
+        setBgmTracks(bgmTracks.filter(t => t.url !== track.url));
+        if (gameState.bgm?.trackUrl === track.url) {
+          api.updateGameState(roomCode, { bgm: { ...gameState.bgm, trackUrl: null } });
+        }
+      }
+    }
+  };
 
   const handleLogin = async () => {
     const res = await api.adminLogin(login);
@@ -206,6 +261,111 @@ export function AdminView() {
           </div>
         </div>
 
+        
+
+      {/* QR Code Modal */}
+      {showQrModal && (
+        <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-6 relative">
+            <button 
+              onClick={() => setShowQrModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
+            >
+              <X size={24} />
+            </button>
+            
+            <h2 className="text-2xl font-bold tracking-widest text-center mb-6 text-blue-400 uppercase">Сканируй, чтобы играть</h2>
+            
+            <div className="bg-white p-4 rounded-xl flex items-center justify-center w-64 h-64 mx-auto mb-6">
+              <QRCodeSVG value={`${window.location.origin}/?code=${roomCode}`} size={224} />
+            </div>
+
+            <div className="text-center font-bold text-gray-300">
+              Или перейди по ссылке:<br/>
+              <span className="text-blue-400 text-sm font-mono mt-2 inline-block">{`${window.location.origin}/?code=${roomCode}`}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBgmModal && (
+        <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 relative">
+            <button onClick={() => setShowBgmModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white">
+              <X size={24} />
+            </button>
+            <h2 className="text-2xl font-bold mb-4 flex items-center gap-2 text-purple-400"><Music /> Фоновая музыка</h2>
+            
+            <div className="bg-black/50 p-4 rounded-xl border border-gray-700 mb-6">
+              <h3 className="text-gray-400 text-sm mb-2 uppercase font-bold">Текущий трек</h3>
+              <div className="flex items-center gap-4">
+                <button 
+                  onClick={() => api.updateGameState(roomCode, { bgm: { ...gameState.bgm, trackUrl: gameState.bgm?.trackUrl ? null : (bgmTracks[0]?.url || null) } })}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center ${gameState.bgm?.trackUrl ? 'bg-red-600 hover:bg-red-500' : 'bg-green-600 hover:bg-green-500'}`}
+                >
+                  {gameState.bgm?.trackUrl ? <Pause size={20} /> : <Play size={20} />}
+                </button>
+                <div className="flex-1">
+                  <div className="text-white font-bold truncate">{gameState.bgm?.trackUrl ? gameState.bgm.trackUrl.split('/').pop() : 'Выключено'}</div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Volume2 size={16} className="text-gray-400" />
+                    <input 
+                      type="range" 
+                      min="0" max="1" step="0.05" 
+                      value={gameState.bgm?.volume || 0.1}
+                      onChange={(e) => api.updateGameState(roomCode, { bgm: { ...gameState.bgm, volume: parseFloat(e.target.value) } })}
+                      className="w-full accent-purple-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-4 flex justify-between items-center">
+              <h3 className="text-lg font-bold">Библиотека</h3>
+              <div className="flex gap-2">
+                {gameState.bgm?.trackUrl && (
+                  <button onClick={() => api.updateGameState(roomCode, { bgm: { ...gameState.bgm, trackUrl: null } })} className="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors">
+                    <Pause size={16} /> Выключить
+                  </button>
+                )}
+                <label className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg cursor-pointer text-sm font-bold flex items-center gap-2 transition-colors">
+                  <Upload size={16} /> Загрузить
+                  <input type="file" accept="audio/*" onChange={handleFileUpload} className="hidden" />
+                </label>
+              </div>
+            </div>
+            
+            <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
+              {bgmTracks.length === 0 ? (
+                <div className="text-gray-500 text-center py-8">Нет загруженных треков</div>
+              ) : (
+                bgmTracks.map((track, i) => (
+                  <div key={i} className="bg-gray-800 hover:bg-gray-700 p-3 rounded-lg flex items-center justify-between border border-gray-700 transition-colors">
+                    <div className="text-sm text-gray-200 truncate pr-4 flex-1" title={track.name}>{track.name}</div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => api.updateGameState(roomCode, { bgm: { trackUrl: track.url, volume: gameState.bgm?.volume || 0.1 } })}
+                        className={`px-3 py-1 rounded text-xs font-bold ${gameState.bgm?.trackUrl === track.url ? 'bg-purple-600 text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-50'}`}
+                      >
+                        {gameState.bgm?.trackUrl === track.url ? 'ВЫБРАН' : 'ВЫБРАТЬ'}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteTrack(track)}
+                        className="text-gray-400 hover:text-red-500 p-1 transition-colors"
+                        title="Удалить"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
         {/* Header and Controls */}
         <div className="bg-gray-900/80 border border-gray-700 p-6 rounded-2xl sticky top-4 z-50 shadow-2xl backdrop-blur-md">
           <div className="flex justify-between items-start mb-4">
@@ -225,6 +385,26 @@ export function AdminView() {
                   {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
                   <span className="text-xs font-bold uppercase tracking-wider">{copied ? 'Скопировано!' : 'Поделиться'}</span>
                 </button>
+
+                <button 
+                  onClick={() => setShowQrModal(true)}
+                  className="bg-gray-800 hover:bg-gray-700 text-gray-300 p-2 rounded-lg flex items-center gap-2 transition-colors border border-gray-600"
+                  title="Показать QR-код"
+                >
+                  <QrCode size={16} />
+                  <span className="text-xs font-bold uppercase tracking-wider">QR-Код</span>
+                </button>
+
+
+                <button 
+                  onClick={() => setShowBgmModal(true)}
+                  className="bg-purple-900/50 hover:bg-purple-800/80 text-purple-300 p-2 rounded-lg flex items-center gap-2 transition-colors border border-purple-500/50"
+                  title="Фоновая музыка"
+                >
+                  <Music size={16} />
+                  <span className="text-xs font-bold uppercase tracking-wider">Музыка</span>
+                </button>
+
               </div>
               <p className="text-gray-400 mt-2 text-sm">
                 Игроков: <span className="text-white font-bold">{playerCount} / 10</span> | Экран: {gameState.screenConnected ? <span className="text-green-400 font-bold">Подключен</span> : <span className="text-red-400">Нет</span>}
@@ -259,6 +439,11 @@ export function AdminView() {
                 </div>
               )}
               {gameState.status === 'lobby' && playerCount < 3 && <p className="text-xs text-red-400 mt-2">Минимум 3 игрока</p>}
+              {gameState.status !== 'lobby' && gameState.phaseEndTime > 0 && (
+                <div className={`mt-3 bg-gray-900 border border-gray-700 px-4 py-2 rounded-lg text-2xl font-mono text-center ${getTimerClasses(timeLeft) || 'text-gray-400'}`}>
+                  {formatTime(timeLeft)}
+                </div>
+              )}
             </div>
           </div>
           <button onClick={handleSaveConfig} className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold tracking-widest transition-colors mt-2 ${saveSuccess ? 'bg-green-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}>
@@ -373,11 +558,36 @@ export function AdminView() {
                 {round.type !== 'paparazzi' ? (
                   <div className="flex flex-col gap-4">
                     {round.type === 'fish' && (
-                       <div className="bg-blue-900/20 border border-blue-800/50 p-4 rounded-xl flex gap-3 text-sm text-blue-200">
-                         <Info className="flex-shrink-0 text-blue-400" size={20} />
-                         <p>
-                           <b>Инструкция:</b> В вопросе используйте фразу <b>«этот игрок»</b>. При выводе на экран она автоматически заменится на аватарку и имя игрока, которого вы выберете из списка справа.
-                         </p>
+                       <div className="bg-blue-900/20 border border-blue-800/50 p-4 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-sm text-blue-200">
+                         <div className="flex gap-3">
+                           <Info className="flex-shrink-0 text-blue-400 mt-0.5" size={20} />
+                           <p>
+                             <b>Инструкция:</b> В вопросе используйте фразу <b>«этот игрок»</b>. При выводе на экран она автоматически заменится на аватарку и имя игрока, которого вы выберете из списка справа.
+                           </p>
+                         </div>
+                         <button
+                           onClick={() => {
+                             if (!draftConfig || !gameState) return;
+                             const pIds = Object.keys(gameState.players);
+                             if (pIds.length === 0) return;
+                             
+                             let shuffled = [...pIds];
+                             for (let i = shuffled.length - 1; i > 0; i--) {
+                               const j = Math.floor(Math.random() * (i + 1));
+                               [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                             }
+                             
+                             const newRounds = [...draftConfig.rounds];
+                             newRounds[rIndex].questions.forEach((q, i) => {
+                               q.targetPlayerId = shuffled[i % shuffled.length];
+                             });
+                             setDraftConfig({ ...draftConfig, rounds: newRounds });
+                           }}
+                           className="flex-shrink-0 flex items-center gap-2 bg-blue-600/80 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors w-full sm:w-auto justify-center"
+                         >
+                           <Shuffle size={16} />
+                           Перемешать игроков
+                         </button>
                        </div>
                     )}
                     {round.questions.map((q, qIndex) => (

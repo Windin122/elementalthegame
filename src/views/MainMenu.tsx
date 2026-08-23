@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, useAnimation, AnimatePresence } from 'motion/react';
-import { Play, Settings, BookOpen, Monitor, ShieldAlert, X } from 'lucide-react';
+import { Play, BookOpen, Monitor, ShieldAlert, X } from 'lucide-react';
 import { useStore } from '../store';
 
 export function MainMenu() {
@@ -148,7 +148,6 @@ export function MainMenu() {
           className="w-full sm:w-[280px] flex flex-col gap-4 mb-20"
         >
           <MainMenuButton icon={<Play size={20} className="ml-1" />} text="Играть" variant="primary" onClick={() => setView('player')} />
-          <MainMenuButton icon={<Settings size={18} />} text="Настройки" onClick={() => {}} />
           <MainMenuButton icon={<BookOpen size={18} />} text="Легенда" onClick={() => setShowLegend(true)} />
         </motion.div>
       </div>
@@ -165,7 +164,7 @@ export function MainMenu() {
           <SecondaryButton icon={<Monitor size={16} />} text="Режим экрана" onClick={() => setView('screen')} />
         </div>
         <div className="text-[9px] font-sans text-gray-700 tracking-[0.5em] uppercase text-center">
-          v0.1a от 7 августа 2026 года
+          v0.1b от 24 августа 2026г
         </div>
       </motion.div>
 

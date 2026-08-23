@@ -3,6 +3,22 @@ import { GameState } from './types';
 const API_BASE = '/api';
 
 export const api = {
+  getBgmTracks: async () => {
+    const res = await fetch("/api/bgm");
+    return res.json();
+  },
+  uploadBgmTrack: async (name: string, dataUrl: string) => {
+    const res = await fetch("/api/bgm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, dataUrl })
+    });
+    return res.json();
+  },
+  deleteBgmTrack: async (filename: string) => {
+    const res = await fetch(`/api/bgm/${filename}`, { method: "DELETE" });
+    return res.json();
+  },
   adminLogin: async (login: string) => {
     const res = await fetch(`${API_BASE}/admin/login`, {
       method: 'POST',
