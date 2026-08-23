@@ -10,7 +10,7 @@ function updateRoom(room: GameState) {
   room.version = (room.version || 0) + 1;
   if (room.listeners) {
     room.listeners.forEach(l => l(room));
-    room.listeners = [];
+    // Do NOT clear listeners for SSE
   }
 }
 
@@ -132,6 +132,59 @@ app.post('/api/room/create', (req, res) => {
 });
 
 
+const mediaStore: {
+  [code: string]: {
+    [playerId: string]: {
+      avatar?: string;
+      photo?: string;
+    }
+  }
+} = {};
+
+app.get("/api/media/:code/:playerId/:type", (req, res) => {
+  const { code, playerId, type } = req.params;
+  const dataUrl = mediaStore[code]?.[playerId]?.[type as 'avatar' | 'photo'];
+  if (dataUrl) {
+    const parts = dataUrl.split(',');
+    if (parts.length === 2) {
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      if (mimeMatch) {
+        const mime = mimeMatch[1];
+        const buffer = Buffer.from(parts[1], 'base64');
+        res.set('Content-Type', mime);
+        res.set('Cache-Control', 'public, max-age=31536000');
+        return res.send(buffer);
+      }
+    }
+  }
+  res.status(404).end();
+});
+
+app.get("/api/room/:code/sse", (req, res) => {
+  const room = rooms[req.params.code];
+  if (!room) return res.status(404).json({ success: false, message: "Room not found" });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+
+  const sendState = (updatedRoom: GameState) => {
+    res.write(`data: ${JSON.stringify({ success: true, state: updatedRoom, version: updatedRoom.version })}\n\n`);
+  };
+
+  if (!room.listeners) room.listeners = [];
+  room.listeners.push(sendState);
+
+  // Send current state immediately
+  sendState(room);
+
+  req.on('close', () => {
+    room.listeners = room.listeners?.filter(l => l !== sendState);
+  });
+});
+
 app.get("/api/room/:code/sync", (req, res) => {
   const room = rooms[req.params.code];
   if (!room) return res.status(404).json({ success: false, message: "Room not found" });
@@ -142,12 +195,16 @@ app.get("/api/room/:code/sync", (req, res) => {
     return res.json({ success: true, state: room, version: room.version });
   }
 
-  const listener = (updatedRoom) => {
-    res.json({ success: true, state: updatedRoom, version: updatedRoom.version });
+  // Fallback if SSE isn't used by older clients for a second
+  const listener = (updatedRoom: GameState) => {
+    if (!res.headersSent) {
+      res.json({ success: true, state: updatedRoom, version: updatedRoom.version });
+    }
   };
   
   if (!room.listeners) room.listeners = [];
   room.listeners.push(listener);
+
 
   req.on("close", () => {
     room.listeners = room.listeners.filter(l => l !== listener);
@@ -205,7 +262,10 @@ app.post('/api/player/avatar', (req, res) => {
   const { code, playerId, avatar } = req.body;
   const room = rooms[code];
   if (room && room.players[playerId]) {
-    room.players[playerId].avatar = avatar;
+    if (!mediaStore[code]) mediaStore[code] = {};
+    if (!mediaStore[code][playerId]) mediaStore[code][playerId] = {};
+    mediaStore[code][playerId].avatar = avatar;
+    room.players[playerId].avatar = `/api/media/${code}/${playerId}/avatar?v=${Date.now()}`;
     updateRoom(room);
     res.json({ success: true });
   } else {
@@ -397,7 +457,10 @@ app.post('/api/player/photo-submit', (req, res) => {
   const { code, playerId, photo } = req.body;
   const room = rooms[code];
   if (room && room.players[playerId]) {
-    room.players[playerId].uploadedPhoto = photo;
+    if (!mediaStore[code]) mediaStore[code] = {};
+    if (!mediaStore[code][playerId]) mediaStore[code][playerId] = {};
+    mediaStore[code][playerId].photo = photo;
+    room.players[playerId].uploadedPhoto = `/api/media/${code}/${playerId}/photo?v=${Date.now()}`;
     updateRoom(room);
     res.json({ success: true });
   } else {
