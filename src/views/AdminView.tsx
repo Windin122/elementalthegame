@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import { SyncManager } from '../SyncManager';
 import { api } from '../api';
 import { GameState, RoundType, GamePhase } from '../types';
-import { HelpCircle, Shuffle, Save, Info, Copy, Check, Music, Upload, Play, Pause, Volume2, X, Trash2, QrCode } from "lucide-react";
+import { HelpCircle, Shuffle, Save, Info, Copy, Check, Music, Upload, Play, Pause, Volume2, X, Trash2, QrCode, Image as ImageIcon } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { formatTime, getTimerClasses } from '../utils';
 
@@ -37,6 +37,7 @@ export function AdminView() {
 
   const [showBgmModal, setShowBgmModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showLogoModal, setShowLogoModal] = useState(false);
   const [bgmTracks, setBgmTracks] = useState<{name: string, url: string}[]>([]);
 
 
@@ -92,6 +93,25 @@ export function AdminView() {
       }
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      const res = await api.uploadLogo(dataUrl);
+      if (res.success) {
+        alert("Логотип успешно загружен! Обновите страницы (F5) для применения.");
+        setShowLogoModal(false);
+      } else {
+        alert("Ошибка при загрузке логотипа");
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
 
@@ -366,6 +386,29 @@ export function AdminView() {
         </div>
       )}
 
+      {showLogoModal && (
+        <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 relative">
+            <button onClick={() => setShowLogoModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white">
+              <X size={24} />
+            </button>
+            <h2 className="text-2xl font-bold mb-4 flex items-center gap-2 text-blue-400"><ImageIcon /> Логотип игры</h2>
+            
+            <div className="bg-black/50 p-6 rounded-xl border border-gray-700 mb-6 flex flex-col items-center gap-6">
+              <div className="h-32 bg-gray-800 rounded-xl border border-gray-600 flex items-center justify-center overflow-hidden w-full max-w-[200px] p-4">
+                <img src="/logo.png" alt="Текущий логотип" className="max-h-full max-w-full object-contain drop-shadow-lg" />
+              </div>
+              <p className="text-gray-400 text-sm text-center">Это изображение отображается в главном меню и на экране игры. Желательно использовать PNG с прозрачным фоном.</p>
+              
+              <label className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-xl cursor-pointer font-bold flex items-center gap-2 transition-colors w-full justify-center">
+                <Upload size={20} /> ЗАГРУЗИТЬ НОВЫЙ ЛОГОТИП
+                <input type="file" accept="image/png, image/jpeg, image/webp" onChange={handleLogoUpload} className="hidden" />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
         {/* Header and Controls */}
         <div className="bg-gray-900/80 border border-gray-700 p-6 rounded-2xl sticky top-4 z-50 shadow-2xl backdrop-blur-md">
           <div className="flex justify-between items-start mb-4">
@@ -403,6 +446,15 @@ export function AdminView() {
                 >
                   <Music size={16} />
                   <span className="text-xs font-bold uppercase tracking-wider">Музыка</span>
+                </button>
+
+                <button 
+                  onClick={() => setShowLogoModal(true)}
+                  className="bg-blue-900/50 hover:bg-blue-800/80 text-blue-300 p-2 rounded-lg flex items-center gap-2 transition-colors border border-blue-500/50"
+                  title="Логотип игры"
+                >
+                  <ImageIcon size={16} />
+                  <span className="text-xs font-bold uppercase tracking-wider">Логотип</span>
                 </button>
 
               </div>

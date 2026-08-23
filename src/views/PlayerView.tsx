@@ -100,12 +100,12 @@ export function PlayerView() {
     if (videoRef.current && canvasRef.current) {
       const context = canvasRef.current.getContext('2d');
       if (context) {
-        canvasRef.current.width = 150;
-        canvasRef.current.height = 150;
+        canvasRef.current.width = 250;
+        canvasRef.current.height = 250;
         const size = Math.min(videoRef.current.videoWidth, videoRef.current.videoHeight);
         const startX = (videoRef.current.videoWidth - size) / 2;
         const startY = (videoRef.current.videoHeight - size) / 2;
-        context.drawImage(videoRef.current, startX, startY, size, size, 0, 0, 150, 150);
+        context.drawImage(videoRef.current, startX, startY, size, size, 0, 0, 250, 250);
         const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.7);
         setAvatarDataUrl(dataUrl);
         
@@ -157,7 +157,7 @@ export function PlayerView() {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       
-      const size = cropTarget === 'avatar' ? 150 : 300;
+      const size = cropTarget === 'avatar' ? 250 : 750;
       canvas.width = size;
       canvas.height = size;
 
@@ -269,12 +269,12 @@ export function PlayerView() {
     if (photoVideoRef.current && photoCanvasRef.current) {
       const context = photoCanvasRef.current.getContext('2d');
       if (context) {
-        photoCanvasRef.current.width = 300;
-        photoCanvasRef.current.height = 300;
+        photoCanvasRef.current.width = 750;
+        photoCanvasRef.current.height = 750;
         const size = Math.min(photoVideoRef.current.videoWidth, photoVideoRef.current.videoHeight);
         const startX = (photoVideoRef.current.videoWidth - size) / 2;
         const startY = (photoVideoRef.current.videoHeight - size) / 2;
-        context.drawImage(photoVideoRef.current, startX, startY, size, size, 0, 0, 300, 300);
+        context.drawImage(photoVideoRef.current, startX, startY, size, size, 0, 0, 750, 750);
         const dataUrl = photoCanvasRef.current.toDataURL('image/jpeg', 0.8);
         setPhotoDataUrl(dataUrl);
         
@@ -676,6 +676,69 @@ export function PlayerView() {
                    )}
                  </div>
                </motion.div>
+             </motion.div>
+           )}
+         </AnimatePresence>
+
+         {/* Cropper Modal for playing phase */}
+         <AnimatePresence>
+           {cropImageSrc && (
+             <motion.div
+               initial={{ opacity: 0 }}
+               animate={{ opacity: 1 }}
+               exit={{ opacity: 0 }}
+               className="fixed inset-0 z-[200] flex flex-col bg-black/95 backdrop-blur-md"
+             >
+               <div className="relative flex-1 w-full mt-4">
+                 <Cropper
+                   image={cropImageSrc}
+                   crop={crop}
+                   zoom={zoom}
+                   aspect={1}
+                   onCropChange={setCrop}
+                   onCropComplete={onCropComplete}
+                   onZoomChange={setZoom}
+                   classes={{ containerClassName: 'bg-transparent' }}
+                 />
+               </div>
+               
+               <div className="p-6 bg-gray-900/80 border-t border-gray-800 flex flex-col gap-4">
+                 <div className="flex items-center gap-4">
+                   <span className="text-sm text-gray-400">Масштаб</span>
+                   <input
+                     type="range"
+                     value={zoom}
+                     min={1}
+                     max={3}
+                     step={0.1}
+                     aria-labelledby="Zoom"
+                     onChange={(e) => {
+                       setZoom(Number(e.target.value))
+                     }}
+                     className="w-full"
+                   />
+                 </div>
+                 
+                 <div className="flex gap-4">
+                   <button
+                     onClick={() => {
+                       setCropImageSrc(null);
+                       setCropTarget(null);
+                       setCrop({ x: 0, y: 0 });
+                       setZoom(1);
+                     }}
+                     className="flex-1 py-4 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold"
+                   >
+                     ОТМЕНА
+                   </button>
+                   <button
+                     onClick={handleSaveCrop}
+                     className="flex-1 py-4 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold"
+                   >
+                     СОХРАНИТЬ
+                   </button>
+                 </div>
+               </div>
              </motion.div>
            )}
          </AnimatePresence>

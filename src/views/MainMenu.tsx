@@ -164,7 +164,7 @@ export function MainMenu() {
           <SecondaryButton icon={<Monitor size={16} />} text="Режим экрана" onClick={() => setView('screen')} />
         </div>
         <div className="text-[9px] font-sans text-gray-700 tracking-[0.5em] uppercase text-center">
-          v0.1b от 24 августа 2026г
+          v0.1b2 от 24 августа 2026 года
         </div>
       </motion.div>
 

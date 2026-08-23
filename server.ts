@@ -29,6 +29,25 @@ if (!fsSync.existsSync(BGM_DIR)) {
 
 app.use("/bgm", express.static(BGM_DIR));
 
+const LOGO_PATH = path.join(process.cwd(), "data", "logo.png");
+app.get("/logo.png", (req, res, next) => {
+  if (fsSync.existsSync(LOGO_PATH)) {
+    res.sendFile(LOGO_PATH);
+  } else {
+    next();
+  }
+});
+
+app.post("/api/logo", (req, res) => {
+  const { dataUrl } = req.body;
+  if (!dataUrl) return res.status(400).json({ success: false });
+  const parts = dataUrl.split(",");
+  if (parts.length !== 2) return res.status(400).json({ success: false });
+  const buffer = Buffer.from(parts[1], "base64");
+  fsSync.writeFileSync(LOGO_PATH, buffer);
+  res.json({ success: true });
+});
+
 app.get("/api/bgm", (req, res) => {
   const files = fsSync.readdirSync(BGM_DIR);
   res.json({ success: true, tracks: files.map(f => ({ name: f, url: `/bgm/${f}` })) });

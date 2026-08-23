@@ -3,6 +3,14 @@ import { GameState } from './types';
 const API_BASE = '/api';
 
 export const api = {
+  uploadLogo: async (dataUrl: string) => {
+    const res = await fetch("/api/logo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataUrl })
+    });
+    return res.json();
+  },
   getBgmTracks: async () => {
     const res = await fetch("/api/bgm");
     return res.json();
